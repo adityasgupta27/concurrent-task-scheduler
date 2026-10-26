@@ -1,0 +1,27 @@
+name: C++ build and tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-and-test:
+    name: Build and test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Configure CMake
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build library, tests, and benchmark
+        run: cmake --build build --config Release --parallel
+
+      - name: Run automated tests
+        run: ctest --test-dir build --output-on-failure -C Release
