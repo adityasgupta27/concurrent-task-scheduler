@@ -138,6 +138,41 @@ void test_worker_cannot_join_its_own_pool() {
     pool.shutdown();
 }
 
+void test_worker_shutdown_racing_external_shutdown() {
+    scheduler::ThreadPool pool(1);
+    std::promise<void> release_promise;
+    const auto release = release_promise.get_future().share();
+    auto worker_shutdown = pool.submit([&pool, release] {
+        release.wait();
+        pool.shutdown();
+    });
+
+    std::promise<void> external_started_promise;
+    auto external_started = external_started_promise.get_future();
+    auto external_shutdown = std::async(std::launch::async, [&] {
+        external_started_promise.set_value();
+        pool.shutdown();
+    });
+    external_started.wait();
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (pool.is_accepting() && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::yield();
+    }
+    const bool shutdown_started = !pool.is_accepting();
+    release_promise.set_value();
+
+    external_shutdown.get();
+    bool worker_call_rejected = false;
+    try {
+        worker_shutdown.get();
+    } catch (const std::logic_error&) {
+        worker_call_rejected = true;
+    }
+    require(shutdown_started, "external shutdown should close submissions before joining");
+    require(worker_call_rejected, "worker shutdown should be rejected during an external join");
+}
+
 void test_submit_racing_shutdown() {
     scheduler::ThreadPool pool(3);
     std::atomic<std::size_t> completed{0};
@@ -214,6 +249,7 @@ int main() {
         {"invalid worker count", test_invalid_worker_count},
         {"concurrent shutdown and rejection", test_concurrent_shutdown_and_rejection},
         {"worker shutdown guard", test_worker_cannot_join_its_own_pool},
+        {"worker shutdown during external join", test_worker_shutdown_racing_external_shutdown},
         {"submit racing shutdown", test_submit_racing_shutdown},
         {"multi-producer stress", test_multi_producer_stress},
     };

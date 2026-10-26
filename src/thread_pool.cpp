@@ -4,6 +4,12 @@
 
 namespace scheduler {
 
+namespace {
+
+thread_local const ThreadPool* current_worker_pool = nullptr;
+
+} // namespace
+
 ThreadPool::ThreadPool(std::size_t worker_count) {
     if (worker_count == 0) {
         throw std::invalid_argument("a thread pool must have at least one worker");
@@ -34,11 +40,8 @@ ThreadPool::~ThreadPool() {
 }
 
 void ThreadPool::shutdown() {
-    const auto caller = std::this_thread::get_id();
-    for (const auto& worker : workers_) {
-        if (worker.get_id() == caller) {
-            throw std::logic_error("shutdown must be called from outside the thread pool");
-        }
+    if (current_worker_pool == this) {
+        throw std::logic_error("shutdown must be called from outside the thread pool");
     }
 
     std::lock_guard<std::mutex> shutdown_lock(shutdown_mutex_);
@@ -73,6 +76,7 @@ std::size_t ThreadPool::worker_count() const noexcept {
 }
 
 void ThreadPool::worker_loop() {
+    current_worker_pool = this;
     for (;;) {
         std::function<void()> task;
         {
@@ -83,6 +87,7 @@ void ThreadPool::worker_loop() {
 
             if (tasks_.empty()) {
                 // Empty queue plus closed submissions means graceful exit.
+                current_worker_pool = nullptr;
                 return;
             }
 
